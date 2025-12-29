@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chess64 0.01 Beta Lite</title>
+<link rel="icon" type="image/png" href="3408_white-knight.png">
+<style>
+:root {
+  --bg:#0f1724;
+  --card:#0b1220cc;
+  --accent:#7c3aed;
+  --light:#e6eef8;
+  --glass: rgba(255,255,255,0.04);
+  --highlight: rgba(124,58,237,0.3);
+}
+html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:linear-gradient(180deg,#071024 0%, #0b1224 50%, #04121a 100%);color:var(--light);}
+.app{display:grid;grid-template-columns:500px 1fr;gap:28px;max-width:1200px;margin:32px auto;padding:28px}
+.panel{background:var(--card);backdrop-filter:blur(10px);border-radius:14px;padding:18px;box-shadow:0 8px 30px rgba(2,6,23,0.7)}
+.left{min-width:420px}
+.board-wrap{display:flex;gap:18px;align-items:center}
+.board{width:420px;height:420px;display:grid;grid-template-columns:repeat(8,1fr);grid-template-rows:repeat(8,1fr);border-radius:10px;overflow:hidden;border:2px solid rgba(255,255,255,0.1);position:relative;}
+.square{display:flex;align-items:center;justify-content:center;font-size:34px;cursor:pointer;user-select:none;width:100%;height:100%;box-sizing:border-box;transition: background 0.2s;}
+.square.light{background:linear-gradient(180deg,#f8f9ff08,#ffffff02);}
+.square.dark{background:linear-gradient(180deg,#0b2540,#082033);}
+.square.highlight{background:var(--highlight);}
+.controls{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.btn{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border:1px solid rgba(255,255,255,0.04);padding:8px 12px;border-radius:10px;color:var(--light);cursor:pointer;transition:all 0.2s;}
+.btn:hover{background:linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));}
+.btn.primary{background:linear-gradient(90deg,var(--accent),#4f46e5);box-shadow:0 6px 18px rgba(79,70,229,0.12);border:none;}
+.right{padding-left:6px}
+.status{font-weight:600;margin-bottom:8px}
+.sub{opacity:0.8;font-size:13px}
+.moves{margin-top:12px;background:var(--glass);padding:10px;border-radius:10px;max-height:300px;overflow:auto}
+header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+h1{font-size:20px;margin:0}
+.small{font-size:13px;opacity:0.85}
+.piece-drag{position:absolute;font-size:34px;pointer-events:none;z-index:1000;}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="panel left">
+    <header>
+      <div>
+        <h1>Beautiful Chess64</h1>
+        <div class="small">Play locally — tap or drag to move</div>
+        <div class="small">Hollow pieces are white; filled pieces are black.</div>
+      </div>
+      <div class="nav">
+        <button class="btn" id="undoBtn">Undo</button>
+        <button class="btn" id="redoBtn">Redo</button>
+        <button class="btn primary" id="newBtn">New Game</button>
+      </div>
+    </header>
+    <div class="controls">
+      <div class="status" id="status">White to move</div>
+      <div class="sub" id="substatus"></div>
+    </div>
+    <div class="board-wrap">
+      <div class="board" id="board"></div>
+    </div>
+  </div>
+  <div class="panel right">
+    <div style="font-weight:700">Move History</div>
+    <div class="moves"><ol id="moveList"></ol></div>
+    <footer>White is always shown at the bottom.</footer>
+  </div>
+</div>
+
+<script>
+const boardEl=document.getElementById('board');
+const statusEl=document.getElementById('status');
+const UNICODE_BLACK={p:'♟',r:'♜',n:'♞',b:'♝',q:'♛',k:'♚'};
+const UNICODE_WHITE={p:'♙',r:'♖',n:'♘',b:'♗',q:'♕',k:'♔'};
+
+let state,selectedPiece=null,dragPieceEl=null,dragStart=null,history=[],redoStack=[],enPassant=null;
+
+function copyBoard(board){return board.map(r=>r.map(c=>c?{...c}:null));}
+function saveHistory(){history.push({board:copyBoard(state.board),turn:state.turn,enPassant:enPassant}); redoStack=[];}
+
+function legalMoves(r,c){
+  const p=state.board[r][c];
+  if(!p) return [];
+  const moves=[];
+  const dirs={'r':[[1,0],[-1,0],[0,1],[0,-1]],'b':[[1,1],[1,-1],[-1,1],[-1,-1]],'q':[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]],'k':[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]],'n':[[2,1],[1,2],[-1,2],[-2,1],[-2,-1],[-1,-2],[1,-2],[2,-1]]};
+  if(p.type==='p'){
+    const dir=p.color==='w'?-1:1,startRow=p.color==='w'?6:1;
+    if(r+dir>=0 && r+dir<8 && !state.board[r+dir][c]) moves.push([r+dir,c]);
+    if(r===startRow && !state.board[r+2*dir][c] && !state.board[r+dir][c]) moves.push([r+2*dir,c]);
+    for(const dc of [-1,1]){
+      const nr=r+dir,nc=c+dc;
+      if(nr>=0&&nr<8&&nc>=0&&nc<8){
+        const t=state.board[nr][nc];
+        if(t && t.color!==p.color) moves.push([nr,nc]);
+        if(!t && enPassant && enPassant[0]===nr && enPassant[1]===nc) moves.push([nr,nc]);
+      }
+    }
+  } else if(p.type==='n'){
+    for(const [dr,dc] of dirs['n']){
+      const nr=r+dr,nc=c+dc;
+      if(nr>=0&&nr<8&&nc>=0&&nc<8){
+        const t=state.board[nr][nc];
+        if(!t||t.color!==p.color) moves.push([nr,nc]);
+      }
+    }
+  } else {
+    const dirSet=p.type==='r'?dirs['r']:p.type==='b'?dirs['b']:p.type==='q'?dirs['q']:dirs['k'];
+    for(const [dr,dc] of dirSet){
+      let nr=r+dr,nc=c+dc;
+      while(nr>=0&&nr<8&&nc>=0&&nc<8){
+        const t=state.board[nr][nc];
+        if(!t) moves.push([nr,nc]);
+        else { if(t.color!==p.color) moves.push([nr,nc]); break; }
+        if(p.type==='k') break;
+        nr+=dr; nc+=dc;
+      }
+    }
+  }
+  return moves;
+}
+
+function startNewGame(){
+  const setup=[['r','n','b','q','k','b','n','r'],['p','p','p','p','p','p','p','p'],Array(8).fill(null),Array(8).fill(null),Array(8).fill(null),Array(8).fill(null),['P','P','P','P','P','P','P','P'],['R','N','B','Q','K','B','N','R']];
+  state={board:setup.map(r=>r.map(c=>c?{type:c.toLowerCase(),color:c===c.toUpperCase()?'w':'b'}:null)),turn:'w'};
+  selectedPiece=null; history=[]; redoStack=[]; enPassant=null;
+  saveHistory(); render();
+}
+
+function render(){
+  boardEl.innerHTML='';
+  for(let r=0;r<8;r++) for(let c=0;c<8;c++){
+    const sq=document.createElement('div');
+    sq.className='square '+((r+c)%2?'dark':'light');
+    sq.dataset.r=r;sq.dataset.c=c;
+    const p=state.board[r][c];
+    sq.textContent = p?p.color==='w'?UNICODE_WHITE[p.type]:UNICODE_BLACK[p.type]:'';
+    sq.onclick=()=>onTap(r,c);
+    sq.onmousedown=e=>onDragStart(e,r,c);
+    if(selectedPiece){
+      const moves=legalMoves(selectedPiece.r,selectedPiece.c);
+      if(moves.some(([mr,mc])=>mr===r&&mc===c)) sq.classList.add('highlight');
+    }
+    boardEl.appendChild(sq);
+  }
+  statusEl.textContent=state.turn==='w'?'White to move':'Black to move';
+}
+
+function onTap(r,c){
+  if(selectedPiece){
+    const moves=legalMoves(selectedPiece.r,selectedPiece.c);
+    if(moves.some(([mr,mc])=>mr===r&&mc===c)) movePiece(selectedPiece.r,selectedPiece.c,r,c);
+    selectedPiece=null;
+  } else if(state.board[r][c]&&state.board[r][c].color===state.turn) selectedPiece={r,c};
+  render();
+}
+
+function movePiece(sr,sc,dr,dc){
+  saveHistory();
+  const piece=state.board[sr][sc];
+  if(!piece) return;
+  if(piece.type==='p' && enPassant && dr===enPassant[0] && dc===enPassant[1]){
+    const capRow=piece.color==='w'?dr+1:dr-1;
+    state.board[capRow][dc]=null;
+  }
+  enPassant=(piece.type==='p' && Math.abs(dr-sr)===2)?[(sr+dr)/2,dc]:null;
+  state.board[dr][dc]=piece;
+  state.board[sr][sc]=null;
+  state.turn=state.turn==='w'?'b':'w';
+  render();
+}
+
+function onDragStart(e,r,c){
+  const piece=state.board[r][c];
+  if(!piece||piece.color!==state.turn) return;
+  dragStart={r,c};
+  dragPieceEl=document.createElement('div');
+  dragPieceEl.className='piece-drag';
+  dragPieceEl.textContent=piece.color==='w'?UNICODE_WHITE[piece.type]:UNICODE_BLACK[piece.type];
+  document.body.appendChild(dragPieceEl);
+  document.onmousemove=ev=>{dragPieceEl.style.left=(ev.pageX-20)+'px';dragPieceEl.style.top=(ev.pageY-20)+'px';};
+  document.onmouseup=ev=>{
+    const elem=document.elementFromPoint(ev.clientX,ev.clientY);
+    if(elem && elem.dataset.r!==undefined){
+      const dr=parseInt(elem.dataset.r),dc=parseInt(elem.dataset.c);
+      const moves=legalMoves(dragStart.r,dragStart.c);
+      if(moves.some(([mr,mc])=>mr===dr&&mc===dc)) movePiece(dragStart.r,dragStart.c,dr,dc);
+    }
+    dragPieceEl.remove(); dragPieceEl=null; dragStart=null; document.onmousemove=null; document.onmouseup=null;
+  };
+}
+
+document.getElementById('newBtn').onclick=startNewGame;
+document.getElementById('undoBtn').onclick=()=>{if(history.length>1){redoStack.push(history.pop()); const last=history[history.length-1]; state={board:copyBoard(last.board),turn:last.turn}; enPassant=last.enPassant; render();}};
+document.getElementById('redoBtn').onclick=()=>{if(redoStack.length>0){const next=redoStack.pop(); history.push({board:copyBoard(state.board),turn:state.turn,enPassant:enPassant}); state={board:copyBoard(next.board),turn:next.turn}; enPassant=next.enPassant; render();}};
+
+startNewGame();
+</script>
+</body>
+</html>
